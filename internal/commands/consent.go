@@ -355,6 +355,9 @@ func paginateOpts(limit int) clientPageOpts {
 // for option construction.
 type clientPageOpts = client.PageOptions
 
+// clientSCIMOpts is the matching alias for SCIM 2.0 pagination.
+type clientSCIMOpts = client.SCIMOptions
+
 func readAll(r interface{ Read(p []byte) (int, error) }) ([]byte, error) {
 	buf := make([]byte, 0, 4096)
 	tmp := make([]byte, 4096)

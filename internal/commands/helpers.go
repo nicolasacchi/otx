@@ -1,8 +1,14 @@
 package commands
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
+	"io"
+	"mime/multipart"
 	"net/url"
+	"os"
+	"path/filepath"
 
 	"github.com/tidwall/gjson"
 )
@@ -35,4 +41,35 @@ func paramsWith(kv ...string) url.Values {
 		p.Set(kv[i], kv[i+1])
 	}
 	return p
+}
+
+// scimPaginateOpts builds a SCIM pagination options struct from a limit value.
+func scimPaginateOpts(limit int) clientSCIMOpts {
+	return clientSCIMOpts{Count: 50, MaxItems: limit}
+}
+
+// buildMultipart reads a file from disk and packages it as a multipart/form-data
+// body with field name "file". Returns the body bytes and the Content-Type
+// (which includes the random boundary) so the caller can hand both to
+// client.Raw.
+func buildMultipart(path string) ([]byte, string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, "", fmt.Errorf("open %s: %w", path, err)
+	}
+	defer f.Close()
+
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	part, err := w.CreateFormFile("file", filepath.Base(path))
+	if err != nil {
+		return nil, "", err
+	}
+	if _, err := io.Copy(part, f); err != nil {
+		return nil, "", err
+	}
+	if err := w.Close(); err != nil {
+		return nil, "", err
+	}
+	return buf.Bytes(), w.FormDataContentType(), nil
 }
