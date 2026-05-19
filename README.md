@@ -6,10 +6,14 @@ output, TTY-aware tables via go-pretty, gjson `--jq` filter, structured error
 envelope with deterministic exit codes, agent-mode row caps under `CLAUDECODE=1`,
 read-only by default with writes gated behind `--confirm` + write credentials.
 
-**Phase 1 (v0.1.x) ships:** auth + config + consent (CMP) + UCPM. Subsequent
-phases add DSAR, data mapping, TPRM, GRC (risk/audit/incident/policy), workflows,
-SCIM users, webhooks, attachments, exports, ESG, ethics, CoI, and `overview`.
-See the design plan for the full roadmap.
+**v1.0.0 — all six phases shipped.** 25 top-level command groups covering every
+OneTrust REST endpoint group: auth, config, consent (CMP), ucpm, dsar,
+assessment, workflow, user (SCIM 2.0), role, credential, org, webhook, attach,
+export, auditlog, tprm, datamap, discovery, risk, audit, incident, policy, esg,
+ethics, coi, plus a parallel `overview` fan-out across modules. Ethics-hotline
+and CoI surfaces are partially documented at the API level — those commands
+probe the inferred endpoints and emit `kind:not_publicly_documented` on 404
+rather than failing silently.
 
 ## Install
 
@@ -65,7 +69,21 @@ read-only credentials you get `kind:forbidden_scope` (exit 2).
 | `--verbose` | false | Log requests/responses to stderr |
 | `--timing` | false | Print per-request timing |
 
-## Commands (v0.1)
+## Commands
+
+### `otx overview`
+
+```bash
+otx overview --window 24h
+```
+
+Parallel fan-out across modules — single-call snapshot. Each section runs
+concurrently with its own error envelope on failure (so a partial outage
+doesn't abort the call). Sections: `consent_receipts`, `dsar_open`,
+`assessment_under_review`, `incidents_recent`, `vendors`, `webhooks`, `auth`
+(token expires_in), `scopes` (count granted).
+
+
 
 ### `otx config`
 
@@ -117,10 +135,137 @@ otx consent subject get <data-subject-id>            # v4
 otx ucpm preference get <data-subject-id>            # v4
 otx ucpm preference update --file body.json --confirm
 otx ucpm subject get <data-subject-id>
-otx ucpm subject list
 otx ucpm subject create --file body.json --confirm
+otx ucpm subject list
 otx ucpm consent-group list
 ```
+
+### `otx dsar`
+
+```bash
+otx dsar request list --status IN_PROGRESS
+otx dsar request get <id>
+otx dsar request create --file body.json --confirm
+otx dsar request cancel <id> --reason "duplicate" --confirm
+otx dsar stage update <id> --stage COMPLETE --confirm
+otx dsar subtask list <id>
+otx dsar subtask complete <id> <subtask-id> --confirm
+otx dsar poll <id> --interval 5s --timeout 10m
+```
+
+### `otx assessment` / `otx tprm` / `otx workflow`
+
+```bash
+otx assessment list --stage UNDER_REVIEW
+otx assessment launch --file body.json --confirm
+otx assessment workflow submit <id> --confirm
+otx assessment workflow complete <id> --confirm
+otx assessment result list <id>
+otx assessment risk create <id> --file body.json --confirm
+otx assessment attachment upload <id> --file evidence.pdf --confirm
+
+otx tprm vendor list --all
+otx tprm vendor get <id>
+otx tprm vendor link-child <parent> <child> --confirm
+otx tprm assessment list --vendor <id>
+otx tprm questionnaire send --file body.json --confirm
+otx tprm score get <vendor-id>
+
+otx workflow workflow {list,get,create,export,import}
+otx workflow task {list,create,complete}
+otx workflow approval {list,approve,reject}
+```
+
+### `otx datamap` / `otx discovery` / `otx risk`
+
+```bash
+otx datamap inventory list --type system
+otx datamap inventory upsert-by-ref <ext-id> --type vendor --file body.json --confirm
+otx datamap link {list,add,remove} --type system <inv-id>
+otx datamap ropa generate --confirm
+otx datamap ropa export
+otx datamap classification {list,create}
+otx datamap schema get --type processingactivity
+
+otx discovery scan create --file scan.json --confirm
+otx discovery scan list
+otx discovery poll <job-id> --interval 10s --timeout 60m
+otx discovery classify submit <job-id> --file data.json --confirm
+otx discovery detector {list,create}
+
+otx risk it-risk {list,get,create,update}
+```
+
+### `otx audit` / `otx incident` / `otx policy`
+
+```bash
+otx audit workpaper {list,get,create}
+otx audit finding {list,get,create,update}
+otx audit plan {list,get}
+
+otx incident list --stage IN_PROGRESS
+otx incident create --file body.json --confirm
+otx incident workflow-advance <id> --to RESOLVED --confirm
+
+otx policy policy {list,get,create,update}
+otx policy notice {list,get}
+otx policy template list
+```
+
+### `otx user` (SCIM 2.0) / `otx role` / `otx credential` / `otx org` / `otx webhook`
+
+```bash
+otx user list --filter 'userName eq "alice"'
+otx user create --file scim-user.json --confirm
+otx user update <id> --file patch.json --confirm
+otx user group add-user <group-id> --user-ids <id1>,<id2> --confirm
+otx user schema list
+
+otx role list
+otx role scope grant <role-id> CONSENTMANAGER_WRITE --confirm
+otx role scope revoke <role-id> AUDIT_READ --confirm
+
+otx credential client {list,create,delete}
+otx credential api-key {list,create,delete}     # legacy; warn-on-use
+
+otx org {list,get,create,delete}
+
+otx webhook subscribe --file body.json --confirm
+otx webhook event {list,replay}
+```
+
+### `otx attach` / `otx export` / `otx auditlog`
+
+```bash
+otx attach upload --file evidence.pdf --confirm     # max 64MB
+otx attach download <id> --out file.bin
+otx attach subject-zip <data-subject-id>            # downloads .zip
+
+otx export bulk create --type CONSENT_RECEIPTS --from 2026-05-01 --to 2026-05-19 \
+                       --await --out receipts.csv --confirm
+otx export bulk status <id>
+otx export bulk download <id> --out file.csv
+otx export poll <id> --timeout 30m
+
+otx auditlog login-history --from 24h
+otx auditlog activity search --user <id> --action modified
+```
+
+### `otx esg` / `otx ethics` / `otx coi`
+
+```bash
+otx esg metric list --from 2026-Q1 --to 2026-Q2     # ⚠ deprecated June 2025
+otx esg framework list
+otx esg report generate --file body.json --confirm
+
+otx ethics case {list,get,update}                   # 404 → kind:not_publicly_documented
+otx ethics hotline-config get
+
+otx coi disclosure {submit,list,get}
+otx coi approval {list,approve}
+```
+
+### `otx config` / `otx auth` (Phase 1 surfaces, unchanged)
 
 ## Output
 
