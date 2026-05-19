@@ -174,6 +174,110 @@ var commandColumns = map[string][]ColumnDef{
 		{Header: "CREATED", Key: "createdDate"},
 	},
 
+	// --- tprm ---
+	"tprm.vendor.list": {
+		{Header: "ID", Key: "id"},
+		{Header: "NAME", Key: "name", Format: Truncate80},
+		{Header: "STATUS", Key: "status"},
+		{Header: "RISK", Key: "riskRating"},
+	},
+
+	// --- datamap ---
+	"datamap.inventory.list": {
+		{Header: "ID", Key: "id"},
+		{Header: "NAME", Key: "name", Format: Truncate80},
+		{Header: "TYPE", Key: "type"},
+		{Header: "STATUS", Key: "status"},
+	},
+	"datamap.classification.list": {
+		{Header: "ID", Key: "id"},
+		{Header: "NAME", Key: "name"},
+		{Header: "LEVEL", Key: "level"},
+	},
+
+	// --- discovery ---
+	"discovery.scan.list": {
+		{Header: "ID", Key: "id"},
+		{Header: "NAME", Key: "name", Format: Truncate80},
+		{Header: "STATUS", Key: "status"},
+		{Header: "CREATED", Key: "createdDate"},
+	},
+	"discovery.detector.list": {
+		{Header: "ID", Key: "id"},
+		{Header: "NAME", Key: "name"},
+		{Header: "TYPE", Key: "type"},
+	},
+
+	// --- risk ---
+	"risk.list": {
+		{Header: "ID", Key: "id"},
+		{Header: "NAME", Key: "name", Format: Truncate80},
+		{Header: "OWNER", Key: "ownerId"},
+		{Header: "SCORE", Key: "score"},
+		{Header: "STAGE", Key: "stage"},
+	},
+
+	// --- audit/incident/policy (P4) ---
+	"audit.workpaper.list": {
+		{Header: "ID", Key: "id"},
+		{Header: "NAME", Key: "name", Format: Truncate80},
+		{Header: "STATUS", Key: "status"},
+		{Header: "AUDIT", Key: "auditId"},
+	},
+	"audit.finding.list": {
+		{Header: "ID", Key: "id"},
+		{Header: "TITLE", Key: "title", Format: Truncate80},
+		{Header: "SEVERITY", Key: "severity"},
+		{Header: "STATUS", Key: "status"},
+	},
+	"incident.list": {
+		{Header: "ID", Key: "id"},
+		{Header: "TITLE", Key: "title", Format: Truncate80},
+		{Header: "SEVERITY", Key: "severity"},
+		{Header: "STATUS", Key: "status"},
+		{Header: "CREATED", Key: "createdDate"},
+	},
+	"policy.policy.list": {
+		{Header: "ID", Key: "id"},
+		{Header: "NAME", Key: "name", Format: Truncate80},
+		{Header: "TYPE", Key: "type"},
+		{Header: "STATUS", Key: "status"},
+	},
+	"policy.notice.list": {
+		{Header: "ID", Key: "id"},
+		{Header: "TITLE", Key: "title", Format: Truncate80},
+		{Header: "VERSION", Key: "version"},
+	},
+	"policy.template.list": {
+		{Header: "ID", Key: "id"},
+		{Header: "NAME", Key: "name", Format: Truncate80},
+		{Header: "FRAMEWORK", Key: "framework"},
+	},
+
+	// --- esg / ethics / coi (P5) ---
+	"esg.metric.list": {
+		{Header: "ID", Key: "id"},
+		{Header: "NAME", Key: "name", Format: Truncate80},
+		{Header: "PERIOD", Key: "reportingPeriod"},
+		{Header: "VALUE", Key: "value"},
+	},
+	"esg.framework.list": {
+		{Header: "ID", Key: "id"},
+		{Header: "NAME", Key: "name"},
+	},
+	"ethics.case.list": {
+		{Header: "ID", Key: "id"},
+		{Header: "SUBJECT", Key: "subject", Format: Truncate80},
+		{Header: "STATUS", Key: "status"},
+		{Header: "CREATED", Key: "createdDate"},
+	},
+	"coi.disclosure.list": {
+		{Header: "ID", Key: "id"},
+		{Header: "TYPE", Key: "type"},
+		{Header: "STATUS", Key: "status"},
+		{Header: "CREATED", Key: "createdDate"},
+	},
+
 	// --- auditlog ---
 	"auditlog.login-history": {
 		{Header: "USER", Key: "userId"},
