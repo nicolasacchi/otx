@@ -15,6 +15,7 @@ var (
 	version          = "dev"
 	clientIDFlag     string
 	clientSecretFlag string
+	apiKeyFlag       string
 	baseURLFlag      string
 	projectFlag      string
 	jsonFlag         bool
@@ -83,6 +84,7 @@ func loadClient(writeMode bool) (*client.Client, *config.Credentials, error) {
 	creds, err := config.LoadCredentials(config.LoadOptions{
 		ClientIDFlag:     clientIDFlag,
 		ClientSecretFlag: clientSecretFlag,
+		APIKeyFlag:       apiKeyFlag,
 		BaseURLFlag:      baseURLFlag,
 		ProjectFlag:      projectFlag,
 		WriteMode:        writeMode,
@@ -90,7 +92,14 @@ func loadClient(writeMode bool) (*client.Client, *config.Credentials, error) {
 	if err != nil {
 		return nil, nil, &client.APIError{Kind: "auth_failed", Detail: err.Error(), Hint: "run 'otx config doctor' to verify your setup"}
 	}
-	tokens := client.NewTokenProvider(creds.BaseURL, creds.ClientID, creds.ClientSecret, verboseFlag)
+	// An API key authenticates directly as a static bearer; otherwise exchange
+	// OAuth client credentials.
+	var tokens *client.TokenProvider
+	if creds.APIKey != "" {
+		tokens = client.NewStaticTokenProvider(creds.BaseURL, creds.APIKey, verboseFlag)
+	} else {
+		tokens = client.NewTokenProvider(creds.BaseURL, creds.ClientID, creds.ClientSecret, verboseFlag)
+	}
 	return client.New(creds.BaseURL, tokens, verboseFlag), creds, nil
 }
 
@@ -150,6 +159,7 @@ func validationErr(format string, args ...any) error {
 func init() {
 	rootCmd.PersistentFlags().StringVar(&clientIDFlag, "client-id", "", "OneTrust OAuth client_id (overrides OTX_CLIENT_ID)")
 	rootCmd.PersistentFlags().StringVar(&clientSecretFlag, "client-secret", "", "OneTrust OAuth client_secret (overrides OTX_CLIENT_SECRET)")
+	rootCmd.PersistentFlags().StringVar(&apiKeyFlag, "api-key", "", "OneTrust API key used as a direct bearer token (overrides OTX_API_KEY; alternative to --client-id/--client-secret)")
 	rootCmd.PersistentFlags().StringVar(&baseURLFlag, "base-url", "", "OneTrust tenant base URL (overrides OTX_BASE_URL; default app-eu.onetrust.com)")
 	rootCmd.PersistentFlags().StringVar(&projectFlag, "project", "", "Use a named project from ~/.config/otx/config.toml")
 	rootCmd.PersistentFlags().BoolVar(&jsonFlag, "json", false, "Force JSON output (auto-enabled when stdout is not a TTY)")

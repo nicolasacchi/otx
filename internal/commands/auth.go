@@ -3,7 +3,9 @@ package commands
 import (
 	"context"
 	"encoding/json"
+	"errors"
 
+	"github.com/nicolasacchi/otx/internal/client"
 	"github.com/spf13/cobra"
 )
 
@@ -28,6 +30,13 @@ var authTokenGetCmd = &cobra.Command{
 		info, err := c.Tokens().PeekToken(context.Background())
 		if err != nil {
 			return err
+		}
+		if c.Tokens().IsStatic() {
+			return printJSONValue(map[string]any{
+				"access_token": info.AccessToken,
+				"mode":         "api_key",
+				"note":         "static API key — no OAuth expiry",
+			})
 		}
 		return printJSONValue(map[string]any{
 			"access_token":       info.AccessToken,
@@ -69,6 +78,19 @@ var authTokenValidateCmd = &cobra.Command{
 		// Hitting /api/access/v1/oauth/scopes is the cheapest auth-only probe.
 		body, err := c.Get(context.Background(), "/api/access/v1/oauth/scopes", nil)
 		if err != nil {
+			// A non-401 error means the bearer was accepted — the endpoint is
+			// just absent/forbidden — so the token is still valid. Only a 401
+			// (auth_failed) indicates a genuinely bad token.
+			var apiErr *client.APIError
+			if errors.As(err, &apiErr) && apiErr.Kind != "auth_failed" {
+				return printJSONValue(map[string]any{
+					"ok":             true,
+					"project":        creds.ProjectName,
+					"base_url":       creds.BaseURL,
+					"token_accepted": true,
+					"note":           "token is valid (request authenticated); scope-discovery endpoint is not available on this tenant",
+				})
+			}
 			return err
 		}
 		return printJSONValue(map[string]any{
@@ -95,6 +117,9 @@ var authScopesListCmd = &cobra.Command{
 		}
 		body, err := c.Get(context.Background(), "/api/access/v1/oauth/scopes", nil)
 		if err != nil {
+			if scopesUnavailable(err) {
+				return renderScopesUnavailable()
+			}
 			return err
 		}
 		return printData("auth.scopes.list", flattenItems(body))
@@ -112,6 +137,13 @@ var authScopesCheckCmd = &cobra.Command{
 		}
 		body, err := c.Get(context.Background(), "/api/access/v1/oauth/scopes", nil)
 		if err != nil {
+			if scopesUnavailable(err) {
+				return printJSONValue(map[string]any{
+					"scope":   args[0],
+					"granted": "unknown",
+					"note":    "scope-discovery endpoint not available on this tenant — verify in the OneTrust UI",
+				})
+			}
 			return err
 		}
 		want := args[0]

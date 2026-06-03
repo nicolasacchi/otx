@@ -167,7 +167,41 @@ func (c *Client) doRequestWithBody(ctx context.Context, method, rawURL string, b
 	if len(respBody) == 0 {
 		return json.RawMessage("{}"), nil
 	}
+
+	// Guard against non-JSON 2xx bodies. OneTrust (behind Cloudflare) serves its
+	// single-page web-app shell — `200 text/html` — for any API route that does
+	// not exist on the tenant, instead of a 404. Without this check the body
+	// would surface later as a cryptic "json: invalid character '<'" failure.
+	if isNonJSONBody(resp.Header.Get("Content-Type"), respBody) {
+		return nil, &APIError{
+			Status: resp.StatusCode,
+			Kind:   "non_json_response",
+			Detail: nonJSONDetail(resp.Header.Get("Content-Type")),
+			Hint:   "this API path is not available on your tenant — verify the endpoint path and that the module/scope is enabled (try 'otx config doctor')",
+		}
+	}
 	return json.RawMessage(respBody), nil
+}
+
+// isNonJSONBody reports whether a successful response body is not JSON. It keys
+// off an explicit html/xml Content-Type and falls back to sniffing the first
+// non-whitespace byte ('<' ⇒ HTML/XML). It deliberately does NOT reject bodies
+// that merely fail strict JSON parsing, so unusual-but-valid JSON still passes
+// through to the caller untouched.
+func isNonJSONBody(contentType string, body []byte) bool {
+	ct := strings.ToLower(contentType)
+	if strings.Contains(ct, "text/html") || strings.Contains(ct, "application/xml") || strings.Contains(ct, "text/xml") {
+		return true
+	}
+	trimmed := bytes.TrimLeft(body, " \t\r\n")
+	return len(trimmed) > 0 && trimmed[0] == '<'
+}
+
+func nonJSONDetail(contentType string) string {
+	if ct := strings.TrimSpace(contentType); ct != "" {
+		return fmt.Sprintf("expected JSON but received a %q response (the OneTrust web-app shell)", ct)
+	}
+	return "expected JSON but received a non-JSON (HTML) response (the OneTrust web-app shell)"
 }
 
 func (c *Client) doWithRetry(ctx context.Context, method, rawURL string, bodyBytes []byte, contentType string) (*http.Response, error) {
@@ -301,7 +335,12 @@ func parseAPIError(body []byte, statusCode int) *APIError {
 	}
 
 	if apiErr.Detail == "" {
-		apiErr.Detail = strings.TrimSpace(string(body))
+		trimmed := strings.TrimSpace(string(body))
+		// Don't echo an HTML error page (e.g. a Cloudflare/SPA 4xx) verbatim.
+		if len(trimmed) > 0 && trimmed[0] == '<' {
+			trimmed = http.StatusText(statusCode)
+		}
+		apiErr.Detail = trimmed
 		if apiErr.Detail == "" {
 			apiErr.Detail = http.StatusText(statusCode)
 		}

@@ -23,7 +23,7 @@ var orgListCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		body, err := c.Get(context.Background(), "/api/external/organizations", nil)
+		body, err := c.Get(context.Background(), "/api/access/v1/external/organizations", nil)
 		if err != nil {
 			return err
 		}
@@ -40,7 +40,7 @@ var orgGetCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		body, err := c.Get(context.Background(), "/api/external/organizations/"+url.PathEscape(args[0]), nil)
+		body, err := c.Get(context.Background(), "/api/access/v1/external/organizations/"+url.PathEscape(args[0]), nil)
 		if err != nil {
 			return err
 		}
@@ -60,7 +60,7 @@ var orgCreateCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		resp, err := c.Post(context.Background(), "/api/external/organizations", body)
+		resp, err := c.Post(context.Background(), "/api/access/v1/external/organizations", body)
 		if err != nil {
 			return err
 		}
@@ -77,7 +77,7 @@ var orgDeleteCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if err := c.Delete(context.Background(), "/api/external/organizations/"+url.PathEscape(args[0])); err != nil {
+		if err := c.Delete(context.Background(), "/api/access/v1/external/organizations/"+url.PathEscape(args[0])); err != nil {
 			return err
 		}
 		return printJSONValue(map[string]any{"deleted": true, "id": args[0]})

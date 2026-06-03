@@ -14,10 +14,10 @@ var incidentCmd = &cobra.Command{
 }
 
 var (
-	incCreateFile  string
-	incUpdateFile  string
-	incListStage   string
-	incAdvanceTo   string
+	incCreateFile string
+	incUpdateFile string
+	incListStage  string
+	incAdvanceTo  string
 )
 
 var incListCmd = &cobra.Command{

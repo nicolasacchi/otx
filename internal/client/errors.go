@@ -45,7 +45,7 @@ func (e *APIError) ExitCode() int {
 		return 2
 	case "validation":
 		return 3
-	case "not_found":
+	case "not_found", "non_json_response":
 		return 4
 	case "rate_limited":
 		return 5

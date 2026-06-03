@@ -3,6 +3,7 @@ package commands
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -10,8 +11,32 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/nicolasacchi/otx/internal/client"
 	"github.com/tidwall/gjson"
 )
+
+// scopesUnavailable reports whether an error from the OneTrust scope-discovery
+// endpoint (/api/access/v1/oauth/scopes) means the endpoint is simply absent on
+// this tenant — some OneTrust versions/regions don't expose it — rather than a
+// genuine failure. Callers use this to degrade gracefully instead of hard-failing.
+func scopesUnavailable(err error) bool {
+	var apiErr *client.APIError
+	if errors.As(err, &apiErr) {
+		return apiErr.Kind == "not_found" || apiErr.Kind == "non_json_response"
+	}
+	return false
+}
+
+// renderScopesUnavailable prints a clean, exit-0 envelope explaining that the
+// tenant does not expose the scope-discovery endpoint.
+func renderScopesUnavailable() error {
+	return printJSONValue(map[string]any{
+		"ok":        false,
+		"available": false,
+		"detail":    "OneTrust scope-discovery endpoint (/api/access/v1/oauth/scopes) is not available on this tenant",
+		"hint":      "inspect granted scopes in the OneTrust UI: Global Settings → Access Management → Client Credentials",
+	})
+}
 
 // flattenItems normalizes a OneTrust paged response (which may use
 // "content"/"data"/"Resources"/"items") into a JSON array. When the body is

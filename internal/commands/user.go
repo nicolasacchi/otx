@@ -14,11 +14,11 @@ var userCmd = &cobra.Command{
 }
 
 var (
-	userListFilter   string
-	userCreateFile   string
-	userPatchFile    string
-	groupListFilter  string
-	groupAddUserIDs  string
+	userListFilter  string
+	userCreateFile  string
+	userPatchFile   string
+	groupListFilter string
+	groupAddUserIDs string
 )
 
 var userListCmd = &cobra.Command{

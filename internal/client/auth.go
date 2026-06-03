@@ -22,6 +22,10 @@ type TokenProvider struct {
 	http         *http.Client
 	verbose      bool
 
+	// staticToken, when non-empty, is a long-lived OneTrust API key used
+	// directly as the bearer. No OAuth token exchange is performed.
+	staticToken string
+
 	mu        sync.Mutex
 	token     string
 	expiresAt time.Time
@@ -46,9 +50,29 @@ func NewTokenProvider(baseURL, clientID, clientSecret string, verbose bool) *Tok
 	}
 }
 
+// NewStaticTokenProvider builds a provider that uses a long-lived OneTrust API
+// key directly as the bearer token — no OAuth client-credentials exchange. The
+// key is the value generated under Global Settings → Access Management → API
+// Keys; it is sent verbatim as "Authorization: Bearer <key>".
+func NewStaticTokenProvider(baseURL, apiKey string, verbose bool) *TokenProvider {
+	return &TokenProvider{
+		baseURL:     strings.TrimRight(baseURL, "/"),
+		staticToken: apiKey,
+		http:        &http.Client{Timeout: tokenTimeout},
+		verbose:     verbose,
+	}
+}
+
+// IsStatic reports whether this provider serves a long-lived API key rather
+// than exchanging OAuth client credentials.
+func (p *TokenProvider) IsStatic() bool { return p.staticToken != "" }
+
 // Get returns a valid bearer token, refreshing if expired or within
 // refreshSkew of expiry.
 func (p *TokenProvider) Get(ctx context.Context) (string, error) {
+	if p.staticToken != "" {
+		return p.staticToken, nil
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.token != "" && time.Until(p.expiresAt) > refreshSkew {
@@ -58,7 +82,11 @@ func (p *TokenProvider) Get(ctx context.Context) (string, error) {
 }
 
 // Invalidate forces the next Get() to refresh. Called by the HTTP client on 401.
+// For a static API key there is nothing to refresh, so it is a no-op.
 func (p *TokenProvider) Invalidate() {
+	if p.staticToken != "" {
+		return
+	}
 	p.mu.Lock()
 	p.token = ""
 	p.expiresAt = time.Time{}
@@ -130,6 +158,10 @@ type TokenInfo struct {
 
 // PeekToken returns a TokenInfo snapshot, refreshing if necessary.
 func (p *TokenProvider) PeekToken(ctx context.Context) (*TokenInfo, error) {
+	if p.staticToken != "" {
+		// Static API key — no exchange, no known expiry (ExpiresIn -1 = "n/a").
+		return &TokenInfo{AccessToken: p.staticToken, ExpiresIn: -1}, nil
+	}
 	tok, err := p.Get(ctx)
 	if err != nil {
 		return nil, err

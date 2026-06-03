@@ -170,8 +170,8 @@ var tprmAssessLaunchCmd = &cobra.Command{
 }
 
 var (
-	tprmAssessVendorID  string
-	tprmAssessStage     string
+	tprmAssessVendorID string
+	tprmAssessStage    string
 )
 
 var tprmAssessListCmd = &cobra.Command{

@@ -13,12 +13,16 @@ import (
 // WriteClientID and WriteClientSecret, when set, are used for any mutating
 // command that also passes --confirm.
 type Project struct {
-	ClientID     string `toml:"client_id"`
-	ClientSecret string `toml:"client_secret"`
+	ClientID     string `toml:"client_id,omitempty"`
+	ClientSecret string `toml:"client_secret,omitempty"`
 	BaseURL      string `toml:"base_url,omitempty"`
 
 	WriteClientID     string `toml:"write_client_id,omitempty"`
 	WriteClientSecret string `toml:"write_client_secret,omitempty"`
+
+	// APIKey is a long-lived OneTrust API key used as a direct bearer token,
+	// an alternative to the OAuth client_id/client_secret pair.
+	APIKey string `toml:"api_key,omitempty"`
 }
 
 type Config struct {
@@ -95,14 +99,24 @@ type Credentials struct {
 	ProjectName  string
 	ClientID     string
 	ClientSecret string
+	APIKey       string
 	BaseURL      string
 	WriteMode    bool
+}
+
+// AuthMode reports how the resolved credentials authenticate.
+func (c *Credentials) AuthMode() string {
+	if c.APIKey != "" {
+		return "api_key"
+	}
+	return "oauth"
 }
 
 // LoadOptions controls which credential set LoadCredentials picks.
 type LoadOptions struct {
 	ClientIDFlag     string
 	ClientSecretFlag string
+	APIKeyFlag       string
 	BaseURLFlag      string
 	ProjectFlag      string
 	WriteMode        bool // if true, prefer write_* fields / OTX_WRITE_CLIENT_* env vars
@@ -117,9 +131,13 @@ func LoadCredentials(opts LoadOptions) (*Credentials, error) {
 	// Try flags first (apply to either mode).
 	creds.ClientID = opts.ClientIDFlag
 	creds.ClientSecret = opts.ClientSecretFlag
+	creds.APIKey = opts.APIKeyFlag
 	creds.BaseURL = opts.BaseURLFlag
 
 	// Env vars.
+	if creds.APIKey == "" {
+		creds.APIKey = os.Getenv("OTX_API_KEY")
+	}
 	if opts.WriteMode {
 		if creds.ClientID == "" {
 			creds.ClientID = os.Getenv("OTX_WRITE_CLIENT_ID")
@@ -158,6 +176,9 @@ func LoadCredentials(opts LoadOptions) (*Credentials, error) {
 					creds.ClientSecret = p.ClientSecret
 				}
 			}
+			if creds.APIKey == "" {
+				creds.APIKey = p.APIKey
+			}
 			if creds.BaseURL == "" {
 				creds.BaseURL = p.BaseURL
 			}
@@ -167,8 +188,13 @@ func LoadCredentials(opts LoadOptions) (*Credentials, error) {
 	if creds.BaseURL == "" {
 		creds.BaseURL = defaultBaseURL
 	}
+	// An API key is a complete, standalone credential — when present it bypasses
+	// the OAuth client_id/client_secret requirement.
+	if creds.APIKey != "" {
+		return creds, nil
+	}
 	if creds.ClientID == "" {
-		return nil, fmt.Errorf("client_id required: use --client-id flag, OTX_CLIENT_ID env var, or run 'otx config add'")
+		return nil, fmt.Errorf("client_id required: use --client-id / --api-key flag, OTX_CLIENT_ID / OTX_API_KEY env var, or run 'otx config add'")
 	}
 	if creds.ClientSecret == "" {
 		return nil, fmt.Errorf("client_secret required: use --client-secret flag, OTX_CLIENT_SECRET env var, or run 'otx config add'")

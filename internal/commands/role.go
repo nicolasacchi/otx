@@ -102,6 +102,9 @@ var scopeListCmd = &cobra.Command{
 		}
 		body, err := c.Get(context.Background(), "/api/access/v1/oauth/scopes", nil)
 		if err != nil {
+			if scopesUnavailable(err) {
+				return renderScopesUnavailable()
+			}
 			return err
 		}
 		return printData("auth.scopes.list", flattenItems(body))
