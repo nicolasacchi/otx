@@ -1,6 +1,10 @@
 package client
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/nicolasacchi/clicore/cierrors"
+)
 
 // APIError represents a structured error from the OneTrust API or from otx
 // internals (auth failures, write-locked operations, etc).
@@ -40,6 +44,9 @@ func (e *APIError) Error() string {
 //	6 deprecated / unsupported / write-locked
 //	7 async-timeout
 func (e *APIError) ExitCode() int {
+	// otx-specific kinds first — these carry semantics the fleet-canonical table
+	// doesn't know about (forbidden_scope, the OneTrust SPA-shell
+	// non_json_response, the local validation guard with Status 0).
 	switch e.Kind {
 	case "auth_failed", "forbidden_scope":
 		return 2
@@ -49,22 +56,12 @@ func (e *APIError) ExitCode() int {
 		return 4
 	case "rate_limited":
 		return 5
-	case "deprecated_endpoint", "not_publicly_documented", "write_locked":
-		return 6
-	case "async_timeout":
-		return 7
 	}
-	switch e.Status {
-	case 401, 403:
-		return 2
-	case 400:
-		return 3
-	case 404:
-		return 4
-	case 429:
-		return 5
-	}
-	return 1
+	// Everything else — the shared guard kinds (write_locked / deprecated_endpoint
+	// / not_publicly_documented → 6, async_timeout → 7) and the HTTP-status
+	// fallback (401/403→2, 400→3, 404→4, 429→5, else 1) — delegates to the single
+	// fleet source of truth.
+	return cierrors.ExitCodeFor(e.Status, e.Kind)
 }
 
 func kindForStatus(status int) string {
