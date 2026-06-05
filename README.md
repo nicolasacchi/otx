@@ -100,8 +100,9 @@ otx config doctor                # OAuth token + scope discovery
 ### `otx auth`
 
 ```bash
-otx auth token get            # cached or fresh bearer + expires_at
-otx auth token refresh        # invalidate cache and re-fetch
+otx auth token get            # masked bearer preview + expires_at
+otx auth token get --reveal   # print the full bearer (default is masked)
+otx auth token refresh        # invalidate cache and re-fetch (masked)
 otx auth token validate       # probe a token-gated endpoint
 otx auth scopes list          # OAuth scopes granted to current credentials
 otx auth scopes check <scope> # boolean check for one scope

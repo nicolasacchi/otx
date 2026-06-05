@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/nicolasacchi/otx/internal/redact"
 )
 
 const (
@@ -128,11 +130,11 @@ func (c *Client) doRequest(ctx context.Context, method, rawURL string, body io.R
 
 func (c *Client) doRequestWithBody(ctx context.Context, method, rawURL string, bodyBytes []byte, contentType string) (json.RawMessage, error) {
 	if c.verbose {
-		fmt.Fprintf(os.Stderr, "> %s %s\n", method, rawURL)
-		if len(bodyBytes) > 0 && len(bodyBytes) < 4096 {
-			fmt.Fprintf(os.Stderr, "> Body: %s\n", string(bodyBytes))
-		} else if len(bodyBytes) > 0 {
-			fmt.Fprintf(os.Stderr, "> Body: <%d bytes>\n", len(bodyBytes))
+		fmt.Fprintf(os.Stderr, "> %s %s\n", method, redact.URL(rawURL))
+		if len(bodyBytes) > 0 {
+			// redact.Body masks sensitive fields and caps length, superseding
+			// the previous manual 4096-byte truncation.
+			fmt.Fprintf(os.Stderr, "> Body: %s\n", redact.Body(bodyBytes))
 		}
 	}
 
@@ -158,8 +160,8 @@ func (c *Client) doRequestWithBody(ctx context.Context, method, rawURL string, b
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		if c.verbose && len(respBody) > 0 && len(respBody) < 4096 {
-			fmt.Fprintf(os.Stderr, "< Body: %s\n", string(respBody))
+		if c.verbose && len(respBody) > 0 {
+			fmt.Fprintf(os.Stderr, "< Body: %s\n", redact.Body(respBody))
 		}
 		return nil, parseAPIError(respBody, resp.StatusCode)
 	}
