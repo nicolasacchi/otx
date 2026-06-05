@@ -28,13 +28,37 @@ func TestBody_NonJSONFallback(t *testing.T) {
 	}
 }
 
+// TestBody_RedactsEmailAndPhonePII covers the PII path: a GDPR/profile body
+// carries email + phone in VALUES (not credential keys); both must be masked.
+func TestBody_RedactsEmailAndPhonePII(t *testing.T) {
+	in := []byte(`{"data":{"attributes":{"email":"jane.doe@example.com","phone_number":"+393331234567","first_name":"Jane"}}}`)
+	out := Body(in)
+	for _, leak := range []string{"jane.doe@example.com", "+393331234567"} {
+		if strings.Contains(out, leak) {
+			t.Fatalf("PII %q leaked in verbose body: %s", leak, out)
+		}
+	}
+	if !strings.Contains(out, Marker) {
+		t.Fatalf("expected redaction marker, got: %s", out)
+	}
+}
+
+// TestBody_MasksEmbeddedPII catches PII embedded in a free-text value under a
+// non-PII key (e.g. a note), via the email/phone regex catch-all.
+func TestBody_MasksEmbeddedPII(t *testing.T) {
+	out := Body([]byte(`{"note":"reach jane.doe@example.com or +12025550123"}`))
+	if strings.Contains(out, "jane.doe@example.com") || strings.Contains(out, "+12025550123") {
+		t.Fatalf("embedded PII leaked: %s", out)
+	}
+}
+
 func TestURL_MasksEmailPII(t *testing.T) {
-	in := `https://app-de.onetrust.com/api/users?email=jane.doe@example.com`
+	in := `https://a.klaviyo.com/api/profiles/?filter=equals(email,"jane.doe@example.com")`
 	out := URL(in)
 	if strings.Contains(out, "jane.doe@example.com") {
 		t.Fatalf("email PII leaked in verbose URL: %s", out)
 	}
-	if !strings.HasPrefix(out, "https://app-de.onetrust.com/api/users?") {
+	if !strings.HasPrefix(out, "https://a.klaviyo.com/api/profiles/?") {
 		t.Fatalf("path was mangled: %s", out)
 	}
 }
