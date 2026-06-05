@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 
+	"github.com/nicolasacchi/clicore/redact"
 	"github.com/nicolasacchi/otx/internal/client"
-	"github.com/nicolasacchi/otx/internal/redact"
 	"github.com/spf13/cobra"
 )
 

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/BurntSushi/toml"
+	cliconfig "github.com/nicolasacchi/clicore/config"
 )
 
 // Project is a single named OneTrust tenant + credentials pair. ReadClientID
@@ -64,15 +65,9 @@ func saveConfigFile(cfg *Config) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return err
-	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	return toml.NewEncoder(f).Encode(cfg)
+	// Atomic temp+rename (clicore) so an interrupted encode can't corrupt a
+	// config that already holds credentials — replaces the prior O_TRUNC write.
+	return cliconfig.SaveTOML(path, cfg)
 }
 
 func resolveProject(cfg *Config, projectFlag string) (string, *Project) {

@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nicolasacchi/otx/internal/redact"
+	"github.com/nicolasacchi/clicore/redact"
 )
 
 const (
