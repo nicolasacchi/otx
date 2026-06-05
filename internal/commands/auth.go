@@ -6,8 +6,22 @@ import (
 	"errors"
 
 	"github.com/nicolasacchi/otx/internal/client"
+	"github.com/nicolasacchi/otx/internal/redact"
 	"github.com/spf13/cobra"
 )
+
+// authRevealFlag, when set, prints the full bearer instead of a masked preview.
+var authRevealFlag bool
+
+// tokenField returns the full token only when --reveal is passed; otherwise a
+// non-revealing preview (e.g. "eyJhbGci...c2ub"). Closes otx-4: `auth token
+// get/refresh` previously echoed the full bearer to stdout unconditionally.
+func tokenField(full string) string {
+	if authRevealFlag {
+		return full
+	}
+	return redact.Token(full)
+}
 
 var authCmd = &cobra.Command{
 	Use:   "auth",
@@ -33,13 +47,15 @@ var authTokenGetCmd = &cobra.Command{
 		}
 		if c.Tokens().IsStatic() {
 			return printJSONValue(map[string]any{
-				"access_token": info.AccessToken,
+				"access_token": tokenField(info.AccessToken),
+				"token_masked": !authRevealFlag,
 				"mode":         "api_key",
 				"note":         "static API key — no OAuth expiry",
 			})
 		}
 		return printJSONValue(map[string]any{
-			"access_token":       info.AccessToken,
+			"access_token":       tokenField(info.AccessToken),
+			"token_masked":       !authRevealFlag,
 			"expires_at":         info.ExpiresAt,
 			"expires_in_seconds": info.ExpiresIn,
 		})
@@ -61,7 +77,8 @@ var authTokenRefreshCmd = &cobra.Command{
 		}
 		return printJSONValue(map[string]any{
 			"refreshed":          true,
-			"access_token":       info.AccessToken,
+			"access_token":       tokenField(info.AccessToken),
+			"token_masked":       !authRevealFlag,
 			"expires_in_seconds": info.ExpiresIn,
 		})
 	},
@@ -168,6 +185,8 @@ var authScopesCheckCmd = &cobra.Command{
 }
 
 func init() {
+	authTokenGetCmd.Flags().BoolVar(&authRevealFlag, "reveal", false, "Print the full bearer token (default: masked preview)")
+	authTokenRefreshCmd.Flags().BoolVar(&authRevealFlag, "reveal", false, "Print the full bearer token (default: masked preview)")
 	authTokenCmd.AddCommand(authTokenGetCmd, authTokenRefreshCmd, authTokenValidateCmd)
 	authScopesCmd.AddCommand(authScopesListCmd, authScopesCheckCmd)
 	authCmd.AddCommand(authTokenCmd, authScopesCmd)
