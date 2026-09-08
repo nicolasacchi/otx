@@ -5,3 +5,5 @@ dist/
 .idea/
 .vscode/
 .DS_Store
+.env
+config.toml
