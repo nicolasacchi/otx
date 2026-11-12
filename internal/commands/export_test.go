@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -147,6 +148,10 @@ type exportFixture struct {
 	recordCount int
 	badAuth     int // parts fetched with a wrong Authorization
 	tenantLeak  int // parts fetched with the tenant bearer
+	pagedCalls  int // GET .../download/pages
+	unpaged     int // GET .../download
+	noPaged     bool
+	pageOverlap bool // repeat the last item of each page at the start of the next
 }
 
 func newExportFixture(t *testing.T, parts [][]byte, recordCount int) *exportFixture {
@@ -155,20 +160,58 @@ func newExportFixture(t *testing.T, parts [][]byte, recordCount int) *exportFixt
 	mux := http.NewServeMux()
 	f.srv = httptest.NewServer(mux)
 	t.Cleanup(f.srv.Close)
+	link := func(i int) map[string]any {
+		return map[string]any{
+			"id": fmt.Sprint(i), "fileName": fmt.Sprintf("f%d.csv.gz", i),
+			"url":     fmt.Sprintf("%s/part/%d", f.srv.URL, i),
+			"headers": map[string]string{"Authorization": fmt.Sprintf("part-token-%d", i)},
+		}
+	}
 	mux.HandleFunc("/api/ot-insights/v1/bulk-export-jobs/run1/download", func(w http.ResponseWriter, r *http.Request) {
+		f.unpaged++
 		if r.Header.Get("Authorization") != "Bearer tenant-token" {
 			w.WriteHeader(401)
 			return
 		}
 		var links []map[string]any
 		for i := range parts {
-			links = append(links, map[string]any{
-				"id": fmt.Sprint(i), "fileName": fmt.Sprintf("f%d.csv.gz", i),
-				"url":     fmt.Sprintf("%s/part/%d", f.srv.URL, i),
-				"headers": map[string]string{"Authorization": fmt.Sprintf("part-token-%d", i)},
-			})
+			links = append(links, link(i))
 		}
 		_ = json.NewEncoder(w).Encode(links)
+	})
+	mux.HandleFunc("/api/ot-insights/v1/bulk-export-jobs/run1/download/pages", func(w http.ResponseWriter, r *http.Request) {
+		f.pagedCalls++
+		if f.noPaged {
+			w.Header().Set("Content-Type", "application/problem+json")
+			w.WriteHeader(404)
+			_, _ = w.Write([]byte(`{"title":"Not Found","status":404}`))
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer tenant-token" {
+			w.WriteHeader(401)
+			return
+		}
+		size, _ := strconv.Atoi(r.URL.Query().Get("size"))
+		if size < 1 || size > 500 {
+			w.WriteHeader(400)
+			return
+		}
+		// continuationToken is an opaque offset, like OneTrust's
+		start := 0
+		if ct := r.URL.Query().Get("continuationToken"); ct != "" {
+			start, _ = strconv.Atoi(strings.TrimPrefix(ct, "c"))
+			if f.pageOverlap {
+				start--
+			}
+		}
+		end := min(start+size, len(parts))
+		items := []map[string]any{}
+		for i := start; i < end; i++ {
+			items = append(items, link(i))
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"items": items, "continuationToken": fmt.Sprintf("c%d", end), "hasNext": end < len(parts),
+		})
 	})
 	mux.HandleFunc("/part/", func(w http.ResponseWriter, r *http.Request) {
 		var i int
@@ -340,6 +383,77 @@ func TestDownloadPartRetriesTruncatedBody(t *testing.T) {
 	p, err := fetchPartWithRetry(exportDownloadLink{URL: srv.URL})
 	if err != nil || p.rows != 2 || calls != 2 {
 		t.Fatalf("err=%v rows=%d calls=%d", err, p.rows, calls)
+	}
+}
+
+func smallPages(t *testing.T, n int) {
+	old := downloadPageSize
+	downloadPageSize = n
+	t.Cleanup(func() { downloadPageSize = old })
+}
+
+// The paginated listing is used (never the unpaged one) and all pages are
+// followed, so a job split across pages is downloaded in full and in order.
+func TestDownloadListsPartsWithPagination(t *testing.T) {
+	smallPages(t, 2)
+	f := newExportFixture(t, threeParts(t), 6)
+	out := filepath.Join(t.TempDir(), "all.csv")
+	sum, err := downloadExportJob(f.c, "run1", exportDownloadOpts{Merge: true, Out: out, Verify: true})
+	if err != nil {
+		t.Fatalf("download: %v", err)
+	}
+	if sum.Parts != 3 || sum.Rows != 6 || f.pagedCalls != 2 || f.unpaged != 0 {
+		t.Fatalf("summary=%+v pagedCalls=%d unpaged=%d", sum, f.pagedCalls, f.unpaged)
+	}
+	got, _ := os.ReadFile(out)
+	if !strings.HasPrefix(string(got), "id,ua\n1,a\n") || !strings.HasSuffix(string(got), "6,g\n") {
+		t.Fatalf("merged order wrong: %q", got)
+	}
+}
+
+// A part repeated across a page boundary is kept once.
+func TestDownloadPaginationDropsDuplicateParts(t *testing.T) {
+	smallPages(t, 2)
+	f := newExportFixture(t, threeParts(t), 6)
+	f.pageOverlap = true
+	sum, err := downloadExportJob(f.c, "run1", exportDownloadOpts{Merge: true, Out: filepath.Join(t.TempDir(), "a.csv"), Verify: true})
+	if err != nil || sum.Parts != 3 || sum.Rows != 6 {
+		t.Fatalf("err=%v summary=%+v", err, sum)
+	}
+}
+
+// Tenants without /download/pages (404) fall back to the unpaged listing.
+func TestDownloadFallsBackToUnpagedListing(t *testing.T) {
+	f := newExportFixture(t, threeParts(t), 6)
+	f.noPaged = true
+	sum, err := downloadExportJob(f.c, "run1", exportDownloadOpts{OutDir: t.TempDir(), Verify: true})
+	if err != nil || sum.Parts != 3 || f.unpaged != 1 {
+		t.Fatalf("err=%v summary=%+v unpaged=%d", err, sum, f.unpaged)
+	}
+}
+
+// hasNext=true with a token that does not move must not loop forever.
+func TestPaginationThatDoesNotAdvanceFails(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"items":[{"id":"a","url":"http://x/a","headers":{"Authorization":"t"}}],"continuationToken":"same","hasNext":true}`))
+	}))
+	defer srv.Close()
+	c := client.New(srv.URL, client.NewStaticTokenProvider(srv.URL, "t", false), false)
+	_, err := fetchDownloadLinks(c, "run1")
+	apiErr, ok := err.(*client.APIError)
+	if !ok || apiErr.Kind != "download_list_failed" || !strings.Contains(apiErr.Detail, "stopped advancing") {
+		t.Fatalf("err = %#v", err)
+	}
+}
+
+// An auth error on the paged listing is reported as is, without falling back.
+func TestPagedListingAuthErrorDoesNotFallBack(t *testing.T) {
+	f := newExportFixture(t, threeParts(t), 6)
+	f.c = client.New(f.srv.URL, client.NewStaticTokenProvider(f.srv.URL, "wrong", false), false)
+	_, err := fetchDownloadLinks(f.c, "run1")
+	apiErr, ok := err.(*client.APIError)
+	if !ok || apiErr.Status != 401 || f.unpaged != 0 {
+		t.Fatalf("err=%#v unpaged=%d", err, f.unpaged)
 	}
 }
 

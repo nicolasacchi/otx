@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -184,11 +185,12 @@ var exportBulkDownloadCmd = &cobra.Command{
 	Short: "Download ALL parts of a finished export (per-part short-lived tokens)",
 	Long: `Download a finished export.
 
-GET .../{runId}/download returns a JSON array of PARTS (a 1-day job had 167,
-a 29-day job 1,045); each part is a gzipped CSV with its own header row and
-its own url + short-lived Authorization token (NOT your tenant token). otx
-fetches every part (6 in parallel, per-part retries) and then checks that the
-total data rows equal the job's recordCount (skip with --no-verify).
+A job is split into many PARTS (a 1-day job had 167, a 29-day job 1,045);
+each part is a gzipped CSV with its own header row and its own url +
+short-lived Authorization token (NOT your tenant token). otx lists the parts
+with the paginated GET .../{runId}/download/pages (200 per page), fetches
+every part (6 in parallel, per-part retries) and then checks that the total
+data rows equal the job's recordCount (skip with --no-verify).
 
 Output modes:
   --out-dir DIR        write each part's .csv.gz as-is (default ./<runId>/),
@@ -197,8 +199,9 @@ Output modes:
                        descriptor order; FILE '-' = stdout; a FILE ending
                        .gz is gzipped. Errors if part headers differ.
 
-For very large jobs OneTrust often times out while LISTING the files
-(error kind download_list_failed): create shorter jobs instead.
+The unpaged GET .../{runId}/download is used only if /download/pages is
+missing: it builds every part's token in one request (~12 ms per part) and
+OneTrust cuts it at ~10.5 s, so it cannot list jobs above ~750 parts.
 
 Receipt rows are personal data — mind where you write them.`,
 	Args: cobra.ExactArgs(1),
@@ -355,7 +358,8 @@ func printExportSummary(body json.RawMessage) {
 }
 
 // exportDownloadLink is one element of the JSON array returned by
-// GET {exportJobsPath}/{runId}/download. There is no "downloadUrl" field
+// GET {exportJobsPath}/{runId}/download (and of the items of /download/pages).
+// There is no "downloadUrl" field
 // anywhere in this API. A job is split into MANY parts (a 1-day job had 167,
 // a 29-day job 1,045); each part has its own url and its own ~1-hour
 // headers.Authorization token, distinct from the caller's tenant bearer.
@@ -392,6 +396,10 @@ func firstDownloadLink(body json.RawMessage) (exportDownloadLink, error) {
 
 // Tunables, vars so tests can shrink them.
 var (
+	// downloadPageSize is the /download/pages size; OneTrust allows 1-500.
+	// 200 keeps each page at ~1.5-2 s, far from the ~10.5 s server cut.
+	downloadPageSize   = 200
+	maxDownloadPages   = 1000
 	descriptorRetries  = 8
 	partAttempts       = 5
 	partRetryBase      = 500 * time.Millisecond
@@ -420,23 +428,29 @@ type fetchedPart struct {
 	rows   int64
 }
 
-// fetchDownloadLinks fetches the descriptor array. The endpoint is flaky for
-// large jobs (the server drops the connection after ~10s with no response),
-// so it gets many more retries than the default.
+// exportDownloadPage is one page of GET {exportJobsPath}/{runId}/download/pages
+// ("Get List of Bulk Export Download Details", OneTrust 202510.2.0). Items have
+// the same shape as the unpaged /download array; continuationToken is opaque
+// and hasNext says whether to ask for another page.
+type exportDownloadPage struct {
+	Items             []exportDownloadLink `json:"items"`
+	ContinuationToken string               `json:"continuationToken"`
+	HasNext           bool                 `json:"hasNext"`
+}
+
+// fetchDownloadLinks lists every part of a job.
+//
+// It uses the paginated /download/pages endpoint. The unpaged /download
+// endpoint mints a fresh per-part token for the whole job in one request
+// (measured: ~1.5 s + ~12 ms per part) and OneTrust drops the connection at
+// ~10.5 s, so any job above ~750 parts can never be listed that way. Pages of
+// downloadPageSize parts answer in 1-3 s whatever the job size. The unpaged
+// endpoint is only a fallback for tenants where /download/pages is absent.
 func fetchDownloadLinks(c *client.Client, runID string) ([]exportDownloadLink, error) {
-	body, err := c.WithMaxRetries(descriptorRetries).Get(context.Background(), exportJobsPath+"/"+url.PathEscape(runID)+"/download", nil)
-	if err != nil {
-		var apiErr *client.APIError
-		if errors.As(err, &apiErr) && apiErr.Status >= 400 && apiErr.Status < 500 {
-			return nil, err
-		}
-		return nil, &client.APIError{
-			Kind:   "download_list_failed",
-			Detail: fmt.Sprintf("could not list the export's files after %d retries: %v", descriptorRetries, err),
-			Hint:   "OneTrust times out when listing the files of large jobs (~1,000 parts); create shorter jobs (e.g. a few days per job) and download each, or retry shortly after the job completes",
-		}
+	links, err := fetchDownloadLinksPaged(c, runID)
+	if err != nil && pagedListingUnavailable(err) {
+		links, err = fetchDownloadLinksUnpaged(c, runID)
 	}
-	links, err := parseExportDownloadLinks(body)
 	if err != nil {
 		return nil, err
 	}
@@ -444,6 +458,85 @@ func fetchDownloadLinks(c *client.Client, runID string) ([]exportDownloadLink, e
 		return nil, validationErr("export download endpoint returned no files — the job may not be complete yet, or its 10-day retention window has expired")
 	}
 	return links, nil
+}
+
+// fetchDownloadLinksPaged follows continuationToken until hasNext is false,
+// dropping parts already seen (by id) so a page boundary can't duplicate rows.
+func fetchDownloadLinksPaged(c *client.Client, runID string) ([]exportDownloadLink, error) {
+	cc := c.WithMaxRetries(descriptorRetries)
+	path := exportJobsPath + "/" + url.PathEscape(runID) + "/download/pages"
+	seen := map[string]bool{}
+	var links []exportDownloadLink
+	token := ""
+	for page := 0; ; page++ {
+		if page >= maxDownloadPages {
+			return nil, &client.APIError{Kind: "download_list_failed",
+				Detail: fmt.Sprintf("listing the export's files did not finish after %d pages", maxDownloadPages)}
+		}
+		q := url.Values{"size": {strconv.Itoa(downloadPageSize)}}
+		if token != "" {
+			q.Set("continuationToken", token)
+		}
+		body, err := cc.Get(context.Background(), path, q)
+		if err != nil {
+			return nil, wrapListErr(err, fmt.Sprintf("page %d", page+1))
+		}
+		var p exportDownloadPage
+		if err := json.Unmarshal(body, &p); err != nil {
+			return nil, &client.APIError{Kind: "api_error", Detail: fmt.Sprintf("unexpected /download/pages response shape (expected {items, continuationToken, hasNext}): %v", err)}
+		}
+		for _, l := range p.Items {
+			if l.ID != "" {
+				if seen[l.ID] {
+					continue
+				}
+				seen[l.ID] = true
+			}
+			links = append(links, l)
+		}
+		if !p.HasNext {
+			return links, nil
+		}
+		if p.ContinuationToken == "" || p.ContinuationToken == token {
+			return nil, &client.APIError{Kind: "download_list_failed",
+				Detail: fmt.Sprintf("listing the export's files stopped advancing at page %d (hasNext=true but continuationToken %q)", page+1, p.ContinuationToken)}
+		}
+		token = p.ContinuationToken
+	}
+}
+
+// fetchDownloadLinksUnpaged is the legacy single-request listing.
+func fetchDownloadLinksUnpaged(c *client.Client, runID string) ([]exportDownloadLink, error) {
+	body, err := c.WithMaxRetries(descriptorRetries).Get(context.Background(), exportJobsPath+"/"+url.PathEscape(runID)+"/download", nil)
+	if err != nil {
+		return nil, wrapListErr(err, "unpaged list")
+	}
+	return parseExportDownloadLinks(body)
+}
+
+// pagedListingUnavailable reports whether /download/pages is missing on this
+// tenant (404, or the gateway's 200 + HTML shell), so the unpaged endpoint is
+// worth trying. Auth errors and timeouts are not a reason to fall back.
+func pagedListingUnavailable(err error) bool {
+	var apiErr *client.APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	return apiErr.Status == http.StatusNotFound || apiErr.Kind == "non_json_response" || apiErr.Kind == "not_found"
+}
+
+// wrapListErr keeps 4xx API errors as they are (auth, not found, job state)
+// and turns exhausted retries into download_list_failed.
+func wrapListErr(err error, where string) error {
+	var apiErr *client.APIError
+	if errors.As(err, &apiErr) && ((apiErr.Status >= 400 && apiErr.Status < 500) || apiErr.Kind == "non_json_response") {
+		return err
+	}
+	return &client.APIError{
+		Kind:   "download_list_failed",
+		Detail: fmt.Sprintf("could not list the export's files (%s) after %d retries: %v", where, descriptorRetries, err),
+		Hint:   "OneTrust did not answer the file listing; retry in a few minutes. If it keeps failing, create shorter jobs (fewer days per job) and download each",
+	}
 }
 
 // downloadExportJob downloads EVERY part of the job, with bounded concurrency
