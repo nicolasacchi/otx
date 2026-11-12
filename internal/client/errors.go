@@ -2,6 +2,7 @@ package client
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/nicolasacchi/clicore/cierrors"
 )
@@ -18,6 +19,10 @@ type APIError struct {
 	Kind   string
 	Detail string
 	Hint   string
+	// Code is the vendor error code (e.g. OneTrust's errors[0].code) and
+	// TraceID the vendor trace id, when the response carried them.
+	Code    string
+	TraceID string
 }
 
 func (e *APIError) Error() string {
@@ -62,6 +67,17 @@ func (e *APIError) ExitCode() int {
 	// fallback (401/403→2, 400→3, 404→4, 429→5, else 1) — delegates to the single
 	// fleet source of truth.
 	return cierrors.ExitCodeFor(e.Status, e.Kind)
+}
+
+// hintForCode returns a specific hint for known OneTrust error codes, or "".
+func hintForCode(code string) string {
+	switch {
+	case strings.Contains(code, "MAX_BULK_EXPORT_CONCURRENT_RUNS_PER_TENANT"):
+		return "OneTrust allows one running bulk-export job per export type — wait for the current one to finish (otx export bulk list / status) and retry"
+	case strings.Contains(code, "FEATURE_NOT_ENABLED"):
+		return "this feature is gated on the tenant, not a credentials problem — ask OneTrust to enable it for your tenant"
+	}
+	return ""
 }
 
 func kindForStatus(status int) string {

@@ -20,8 +20,11 @@ func main() {
 	}
 	var apiErr *client.APIError
 	if errors.As(err, &apiErr) {
-		output.PrintError(apiErr.Detail, apiErr.Kind, apiErr.Status, apiErr.Hint)
+		output.PrintErrorFull(apiErr.Detail, apiErr.Kind, apiErr.Status, apiErr.Hint, apiErr.Code, apiErr.TraceID)
 		fmt.Fprintln(os.Stderr, "Error:", apiErr.Error())
+		if apiErr.Code != "" || apiErr.TraceID != "" {
+			fmt.Fprintf(os.Stderr, "Code: %s  traceId: %s\n", apiErr.Code, apiErr.TraceID)
+		}
 		if apiErr.Hint != "" {
 			fmt.Fprintln(os.Stderr, "Hint:", apiErr.Hint)
 		}

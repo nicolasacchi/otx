@@ -21,6 +21,8 @@ import (
 const (
 	MaxRetries = 3
 	Timeout    = 60 * time.Second
+
+	maxRetryBackoff = 20 * time.Second
 )
 
 // Client is the OneTrust REST client. It uses an injected TokenProvider for
@@ -84,6 +86,14 @@ func (c *Client) Delete(ctx context.Context, path string) error {
 func (c *Client) Raw(ctx context.Context, method, path string, contentType string, body []byte) (json.RawMessage, error) {
 	rawURL := c.buildURL(path, nil)
 	return c.doRequestWithBody(ctx, method, rawURL, body, contentType)
+}
+
+// WithMaxRetries returns a shallow copy of the client that retries transient
+// failures (network errors, 429, 5xx) up to n times instead of MaxRetries.
+func (c *Client) WithMaxRetries(n int) *Client {
+	cp := *c
+	cp.maxRetries = n
+	return &cp
 }
 
 func (c *Client) buildURL(path string, params url.Values) string {
@@ -321,6 +331,9 @@ func parseAPIError(body []byte, statusCode int) *APIError {
 		// 4. {"errors": [{"message": "..."}]}
 		if errs, ok := generic["errors"].([]any); ok && len(errs) > 0 {
 			if obj, ok := errs[0].(map[string]any); ok {
+				if code, ok := obj["code"].(string); ok && code != "" {
+					apiErr.Code = code
+				}
 				if d, ok := obj["message"].(string); ok && d != "" && apiErr.Detail == "" {
 					apiErr.Detail = d
 				} else if d, ok := obj["detail"].(string); ok && d != "" && apiErr.Detail == "" {
@@ -330,10 +343,20 @@ func parseAPIError(body []byte, statusCode int) *APIError {
 				apiErr.Detail = s
 			}
 		}
+		if tid, ok := generic["traceId"].(string); ok && tid != "" {
+			apiErr.TraceID = tid
+		}
 		// 5. SCIM: {"schemas":["...:Error"], "detail": "...", "scimType": "..."}
 		if scimType, ok := generic["scimType"].(string); ok && scimType != "" && apiErr.Detail == "" {
 			apiErr.Detail = scimType
 		}
+	}
+
+	if h := hintForCode(apiErr.Code); h != "" {
+		apiErr.Hint = h
+	}
+	if strings.Contains(apiErr.Code, "FEATURE_NOT_ENABLED") {
+		apiErr.Kind = "feature_not_enabled"
 	}
 
 	if apiErr.Detail == "" {
@@ -364,6 +387,9 @@ func retryDelay(attempt int, retryAfter string) time.Duration {
 	}
 	base := time.Duration(math.Pow(2, float64(attempt))) * time.Second
 	jitter := time.Duration(rand.IntN(500)) * time.Millisecond
+	if base > maxRetryBackoff {
+		base = maxRetryBackoff
+	}
 	return base + jitter
 }
 

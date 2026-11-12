@@ -52,6 +52,11 @@ func PrintData(command string, data json.RawMessage, jsonMode bool, jqFilter str
 // PrintError outputs the structured error envelope to stdout. Stderr lines
 // (human message + hint) are written separately by main.go.
 func PrintError(detail string, kind string, status int, hint string) {
+	PrintErrorFull(detail, kind, status, hint, "", "")
+}
+
+// PrintErrorFull is PrintError plus the vendor error code and trace id.
+func PrintErrorFull(detail string, kind string, status int, hint, code, traceID string) {
 	envelope := map[string]any{
 		"ok": false,
 		"error": map[string]any{
@@ -62,6 +67,12 @@ func PrintError(detail string, kind string, status int, hint string) {
 	}
 	if hint != "" {
 		envelope["error"].(map[string]any)["hint"] = hint
+	}
+	if code != "" {
+		envelope["error"].(map[string]any)["code"] = code
+	}
+	if traceID != "" {
+		envelope["error"].(map[string]any)["traceId"] = traceID
 	}
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
